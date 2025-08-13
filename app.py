@@ -1,4 +1,5 @@
 import streamlit as st
+import logging
 import pandas as pd
 import numpy as np
 try:
@@ -18,7 +19,6 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from sklearn.preprocessing import StandardScaler
 import time
-import logging
 from github import Github
 import requests
 import sys
@@ -26,7 +26,7 @@ import sys
 # Set up logging with current date and time
 logging.basicConfig(filename='debug.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info(f"App started at 10:42 PM +03, Wednesday, August 13, 2025")
+logging.info(f"App started at 10:47 PM +03, Wednesday, August 13, 2025")
 
 # Streamlit page configuration
 st.set_page_config(page_title="Well Pressure and Depth Calculator", layout="wide")
@@ -52,6 +52,11 @@ for module, requirement in required_modules.items():
         st.error(f"The '{module}' package is missing. Ensure '{requirement}' is listed in requirements.txt and installed correctly.")
         logging.error(f"Failed to import {module}. Check if {requirement} is installed.")
         st.stop()
+try:
+    with open('installed_packages.log', 'r') as f:
+        logging.info(f"Installed packages:\n{f.read()}")
+except FileNotFoundError:
+    logging.warning("installed_packages.log not found")
 logging.info(f"Python version: {sys.version}")
 logging.info("All required modules imported successfully")
 
@@ -540,7 +545,7 @@ def analyze_parameter_effects(model, scaler, df_ml):
 
 # Streamlit UI
 st.title("Well Pressure and Depth Calculator")
-st.write(f"App started at 10:42 PM +03, Wednesday, August 13, 2025. Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
+st.write(f"App started at 10:47 PM +03, Wednesday, August 13, 2025. Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
 debug_mode = st.checkbox("Enable Debug Mode", value=False)
 if debug_mode:
     st.text(f"Python version: {sys.version}")
@@ -550,6 +555,11 @@ if debug_mode:
             st.text(f"{module}: {getattr(mod, '__version__', 'unknown')}")
         except ImportError:
             st.text(f"{module}: Not installed")
+    try:
+        with open('installed_packages.log', 'r') as f:
+            st.text(f"Installed packages:\n{f.read()}")
+    except FileNotFoundError:
+        st.text("installed_packages.log not found")
 
 mode = st.selectbox("Select Mode", ["Polynomial Calculation", "Neural Network Analysis", "GLR Graph Drawer"])
 
