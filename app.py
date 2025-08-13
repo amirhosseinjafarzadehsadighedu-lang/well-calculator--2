@@ -1,15 +1,16 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 try:
     from scipy.optimize import fsolve
     import scipy
+    st.session_state['scipy_version'] = scipy.__version__
     logging.info(f"Successfully imported scipy version {scipy.__version__}")
 except ImportError:
-    st.error("The 'scipy' package is missing. Ensure 'scipy==1.10.1' is listed in requirements.txt and installed correctly.")
-    logging.error("Failed to import scipy. Check if scipy==1.10.1 is installed.")
+    st.error("The 'scipy' package is missing. Ensure 'scipy==1.10.1' or 'scipy==1.11.4' is listed in requirements.txt and installed correctly.")
+    logging.error("Failed to import scipy. Check if scipy==1.10.1 or scipy==1.11.4 is installed.")
     st.stop()
 import matplotlib.pyplot as plt
-import streamlit as st
 import os
 import re
 import tensorflow as tf
@@ -18,12 +19,14 @@ from tensorflow.keras.layers import Dense
 from sklearn.preprocessing import StandardScaler
 import time
 import logging
-# from github import Github  # Uncomment for GitHub integration
+from github import Github
+import requests
+import sys
 
 # Set up logging with current date and time
 logging.basicConfig(filename='debug.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info(f"App started at 10:36 PM +03, Wednesday, August 13, 2025")
+logging.info(f"App started at 10:42 PM +03, Wednesday, August 13, 2025")
 
 # Streamlit page configuration
 st.set_page_config(page_title="Well Pressure and Depth Calculator", layout="wide")
@@ -32,24 +35,27 @@ st.set_page_config(page_title="Well Pressure and Depth Calculator", layout="wide
 required_modules = {
     'pandas': 'pandas==2.0.3',
     'numpy': 'numpy==1.24.3',
-    'scipy': 'scipy==1.10.1',
+    'scipy': 'scipy==1.10.1 or scipy==1.11.4',
     'sklearn': 'scikit-learn==1.2.2',
     'matplotlib': 'matplotlib==3.7.2',
     'streamlit': 'streamlit==1.38.0',
     'openpyxl': 'openpyxl==3.1.2',
-    'tensorflow': 'tensorflow==2.12.0'
+    'tensorflow': 'tensorflow==2.12.0',
+    'PyGithub': 'PyGithub==2.3.0',
+    'requests': 'requests==2.31.0'
 }
 for module, requirement in required_modules.items():
     try:
         mod = __import__(module)
-        logging.info(f"Successfully imported {module} version {mod.__version__}")
+        logging.info(f"Successfully imported {module} version {getattr(mod, '__version__', 'unknown')}")
     except ImportError:
         st.error(f"The '{module}' package is missing. Ensure '{requirement}' is listed in requirements.txt and installed correctly.")
         logging.error(f"Failed to import {module}. Check if {requirement} is installed.")
         st.stop()
+logging.info(f"Python version: {sys.version}")
 logging.info("All required modules imported successfully")
 
-# Create data directory if it doesn't exist
+# Create temporary data directory
 DATA_DIR = "data"
 try:
     if not os.path.exists(DATA_DIR):
@@ -58,6 +64,15 @@ try:
 except Exception as e:
     st.error(f"Failed to create data directory: {str(e)}")
     logging.error(f"Failed to create data directory: {str(e)}")
+    st.stop()
+
+# GitHub configuration
+try:
+    GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+    REPO_NAME = "your_username/well-calculator--2"  # Replace with your repository name
+except KeyError:
+    st.error("GitHub token not found in secrets.toml. Please add GITHUB_TOKEN to Streamlit Cloud secrets.")
+    logging.error("GitHub token not found in secrets.toml")
     st.stop()
 
 # Interpolation ranges
@@ -73,6 +88,48 @@ INTERPOLATION_RANGES = {
     (3.5, 400): [(0, 8000), (8000, 9000)],
     (3.5, 600): [(0, 4000), (4000, 6000)]
 }
+
+# Function to download file from GitHub
+def download_from_github(repo_name, file_path, github_token, local_path):
+    try:
+        g = Github(github_token)
+        repo = g.get_repo(repo_name)
+        content = repo.get_contents(file_path)
+        with open(local_path, "wb") as f:
+            f.write(content.decoded_content)
+        logging.info(f"Downloaded {file_path} to {local_path}")
+        return True
+    except Exception as e:
+        # Fallback to direct download using requests
+        try:
+            url = f"https://raw.githubusercontent.com/{repo_name}/main/{file_path}"
+            headers = {"Authorization": f"token {github_token}"}
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                with open(local_path, "wb") as f:
+                    f.write(response.content)
+                logging.info(f"Downloaded {file_path} to {local_path} via direct URL")
+                return True
+            else:
+                logging.error(f"Failed to download {file_path}: HTTP {response.status_code}")
+                return False
+        except Exception as e2:
+            logging.error(f"Failed to download {file_path}: {str(e)} (PyGithub) / {str(e2)} (requests)")
+            return False
+
+# Function to list files in GitHub data directory
+def list_github_files(repo_name, github_token, folder="data"):
+    try:
+        g = Github(github_token)
+        repo = g.get_repo(repo_name)
+        contents = repo.get_contents(folder)
+        files = [content.path for content in contents if content.type == "file" and content.path.endswith(".xlsx")]
+        logging.info(f"Found {len(files)} Excel files in {folder}: {files}")
+        return files
+    except Exception as e:
+        st.error(f"Failed to list files in GitHub repository {repo_name}/{folder}: {str(e)}")
+        logging.error(f"Failed to list files in {repo_name}/{folder}: {str(e)}")
+        return []
 
 # Function to parse the name column
 def parse_name(name):
@@ -90,7 +147,6 @@ def parse_name(name):
         return None, None, None
 
 # Function to load reference data
-@st.cache_data
 def load_reference_data(reference_file_path):
     try:
         logging.info(f"Loading reference file: {reference_file_path}")
@@ -135,15 +191,17 @@ def load_reference_data(reference_file_path):
         st.stop()
 
 # Function to load ML data
-@st.cache_data
-def load_ml_data(data_dir):
-    data_files = [
-        os.path.join(data_dir, f) for f in os.listdir(data_dir)
-        if f.endswith(".xlsx") and f != "reference excel.xlsx"
-    ]
+def load_ml_data(data_dir, github_files):
     dfs_ml = []
     required_cols = ["p1", "D", "y1", "y2", "p2"]
-    for file_name in data_files:
+    for file_path in github_files:
+        file_name = os.path.basename(file_path)
+        if file_name == "reference excel.xlsx":
+            continue
+        local_path = os.path.join(data_dir, file_name)
+        if not download_from_github(REPO_NAME, file_path, GITHUB_TOKEN, local_path):
+            st.warning(f"Failed to download '{file_name}' from GitHub. Skipping.")
+            continue
         logging.info(f"Processing file: {file_name}")
         try:
             match = re.search(r'([\d.]+)\s*in\s*(\d+)\s*stb-day\s*(\d+)\s*glr(?:\s*\(\d+\))?', file_name.lower())
@@ -156,7 +214,7 @@ def load_ml_data(data_dir):
             production_rate = float(match.group(2))
             glr = float(match.group(3))
             
-            df_temp = pd.read_excel(file_name, sheet_name=0, engine='openpyxl')
+            df_temp = pd.read_excel(local_path, sheet_name=0, engine='openpyxl')
             for col in required_cols:
                 if col not in df_temp.columns:
                     st.error(f"Required column '{col}' not found in Excel file '{file_name}'.")
@@ -480,119 +538,23 @@ def analyze_parameter_effects(model, scaler, df_ml):
         logging.error(f"Parameter effect analysis error: {str(e)}")
         return []
 
-# Function to save uploaded file to data directory with retry
-def save_uploaded_file(uploaded_file, file_path, retries=3, delay=1):
-    for attempt in range(retries):
-        try:
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getvalue())
-            logging.info(f"Saved file: {file_path}")
-            st.success(f"Saved file: {os.path.basename(file_path)}")
-            return True
-        except Exception as e:
-            logging.warning(f"Attempt {attempt+1} failed to save file '{uploaded_file.name}' to '{file_path}': {str(e)}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-            continue
-    st.error(f"Failed to save file '{uploaded_file.name}' after {retries} attempts.")
-    logging.error(f"Failed to save file '{uploaded_file.name}' to '{file_path}' after {retries} attempts")
-    st.stop()
-    return False
-
-# # Function to push file to GitHub (uncomment and configure for GitHub integration)
-# def push_to_github(file_path, repo_name, github_token, branch="main"):
-#     try:
-#         g = Github(github_token)
-#         repo = g.get_repo(repo_name)
-#         with open(file_path, "rb") as f:
-#             content = f.read()
-#         file_name = os.path.basename(file_path)
-#         repo_path = f"data/{file_name}"
-#         try:
-#             # Update existing file
-#             contents = repo.get_contents(repo_path, ref=branch)
-#             repo.update_file(
-#                 contents.path, 
-#                 f"Update {file_name}", 
-#                 content, 
-#                 contents.sha, 
-#                 branch=branch
-#             )
-#         except:
-#             # Create new file
-#             repo.create_file(
-#                 repo_path, 
-#                 f"Add {file_name}", 
-#                 content, 
-#                 branch=branch
-#             )
-#         logging.info(f"Pushed file to GitHub: {repo_path}")
-#         st.success(f"Pushed file to GitHub: {repo_path}")
-#     except Exception as e:
-#         st.error(f"Error pushing to GitHub: {str(e)}")
-#         logging.error(f"Error pushing to GitHub: {str(e)}")
-#         st.stop()
-
 # Streamlit UI
 st.title("Well Pressure and Depth Calculator")
-st.write(f"App started at 10:36 PM +03, Wednesday, August 13, 2025. Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
+st.write(f"App started at 10:42 PM +03, Wednesday, August 13, 2025. Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
 debug_mode = st.checkbox("Enable Debug Mode", value=False)
+if debug_mode:
+    st.text(f"Python version: {sys.version}")
+    for module, _ in required_modules.items():
+        try:
+            mod = __import__(module)
+            st.text(f"{module}: {getattr(mod, '__version__', 'unknown')}")
+        except ImportError:
+            st.text(f"{module}: Not installed")
 
 mode = st.selectbox("Select Mode", ["Polynomial Calculation", "Neural Network Analysis", "GLR Graph Drawer"])
 
-# File uploaders
-if mode in ["Polynomial Calculation", "GLR Graph Drawer"]:
-    st.write("Upload the reference Excel file ('reference excel.xlsx') containing 5th-degree polynomial coefficients.")
-    reference_file = st.file_uploader("Upload Reference Excel File", type=["xlsx"], key="reference")
-    if reference_file:
-        reference_file_path = os.path.join(DATA_DIR, "reference excel.xlsx")
-        save_uploaded_file(reference_file, reference_file_path)
-        # Clear cache to ensure new file is processed
-        st.cache_data.clear()
-        # # Push to GitHub (uncomment and configure)
-        # github_token = st.secrets.get("GITHUB_TOKEN", None)  # Store in secrets.toml
-        # repo_name = "your_username/well-calculator--2"  # Replace with your repo
-        # if github_token:
-        #     push_to_github(reference_file_path, repo_name, github_token)
-        # else:
-        #     st.warning("GitHub token not found. File saved locally but not pushed to GitHub.")
-    else:
-        st.warning("Please upload the reference Excel file to proceed.")
-        logging.warning("No reference file uploaded")
-        st.stop()
-
-elif mode == "Neural Network Analysis":
-    st.write("Upload one or more machine learning data Excel files (e.g., '2.875 in 50 stb-day 300 glr.xlsx').")
-    ml_files = st.file_uploader("Upload ML Data Excel Files", type=["xlsx"], accept_multiple_files=True, key="ml_data")
-    if ml_files:
-        for ml_file in ml_files:
-            # Use original filename to preserve naming convention
-            ml_file_path = os.path.join(DATA_DIR, ml_file.name)
-            save_uploaded_file(ml_file, ml_file_path)
-            # # Push to GitHub (uncomment and configure)
-            # github_token = st.secrets.get("GITHUB_TOKEN", None)
-            # repo_name = "your_username/well-calculator--2"
-            # if github_token:
-            #     push_to_github(ml_file_path, repo_name, github_token)
-            # else:
-            #     st.warning(f"GitHub token not found. File '{ml_file.name}' saved locally but not pushed to GitHub.")
-        # Clear cache to ensure new files are processed
-        st.cache_data.clear()
-    else:
-        st.warning("Please upload at least one ML data Excel file to proceed.")
-        logging.warning("No ML data files uploaded")
-        st.stop()
-
 if mode == "Polynomial Calculation":
     st.write("Enter parameters to calculate pressure and depth values using polynomial formulas.")
-    try:
-        data_ref = load_reference_data(os.path.join(DATA_DIR, "reference excel.xlsx"))
-        if debug_mode:
-            st.text(f"Loaded {len(data_ref)} reference data entries")
-    except Exception as e:
-        st.error(f"Failed to load reference data: {str(e)}")
-        logging.error(f"Failed to load reference data: {str(e)}")
-        st.stop()
     with st.form("input_form"):
         col1, col2 = st.columns(2)
         with col1:
@@ -605,6 +567,20 @@ if mode == "Polynomial Calculation":
         submit_button = st.form_submit_button("Calculate")
     
     if submit_button:
+        st.write("Downloading reference Excel file from GitHub...")
+        reference_file_path = os.path.join(DATA_DIR, "reference excel.xlsx")
+        if not download_from_github(REPO_NAME, "data/reference excel.xlsx", GITHUB_TOKEN, reference_file_path):
+            st.error("Failed to download 'reference excel.xlsx' from GitHub.")
+            st.stop()
+        st.cache_data.clear()
+        try:
+            data_ref = load_reference_data(reference_file_path)
+            if debug_mode:
+                st.text(f"Loaded {len(data_ref)} reference data entries")
+        except Exception as e:
+            st.error(f"Failed to load reference data: {str(e)}")
+            logging.error(f"Failed to load reference data: {str(e)}")
+            st.stop()
         result = calculate_results(conduit_size, production_rate, glr, p1, D, data_ref)
         if result[0] is not None:
             y1, y2, p2, coeffs, interpolation_status = result
@@ -632,11 +608,17 @@ if mode == "Polynomial Calculation":
 elif mode == "Neural Network Analysis":
     st.write("Analyzing the effects of parameters on pressure gradient (p2 - p1) using a neural network.")
     if st.button("Run Neural Network Analysis"):
-        st.write("Loading machine learning data...")
+        st.write("Listing Excel files in GitHub repository...")
+        github_files = list_github_files(REPO_NAME, GITHUB_TOKEN)
+        if not github_files:
+            st.error("No Excel files found in GitHub repository data/ folder.")
+            st.stop()
+        st.write("Downloading machine learning data files from GitHub...")
+        st.cache_data.clear()
         try:
-            df_ml = load_ml_data(DATA_DIR)
+            df_ml = load_ml_data(DATA_DIR, github_files)
             if debug_mode:
-                st.text(f"Loaded {len(df_ml)} rows from {len(os.listdir(DATA_DIR))-1} ML data files")
+                st.text(f"Loaded {len(df_ml)} rows from {sum(1 for f in github_files if f != 'data/reference excel.xlsx')} ML data files")
         except Exception as e:
             st.error(f"Failed to load ML data: {str(e)}")
             logging.error(f"Failed to load ML data: {str(e)}")
@@ -665,9 +647,14 @@ elif mode == "Neural Network Analysis":
 else:  # GLR Graph Drawer
     st.write("Displaying GLR curves for different conduit sizes and production rates based on polynomial formulas.")
     if st.button("Generate GLR Graphs"):
-        st.write("Loading reference data...")
+        st.write("Downloading reference Excel file from GitHub...")
+        reference_file_path = os.path.join(DATA_DIR, "reference excel.xlsx")
+        if not download_from_github(REPO_NAME, "data/reference excel.xlsx", GITHUB_TOKEN, reference_file_path):
+            st.error("Failed to download 'reference excel.xlsx' from GitHub.")
+            st.stop()
+        st.cache_data.clear()
         try:
-            data_ref = load_reference_data(os.path.join(DATA_DIR, "reference excel.xlsx"))
+            data_ref = load_reference_data(reference_file_path)
             if debug_mode:
                 st.text(f"Loaded {len(data_ref)} reference data entries")
         except Exception as e:
