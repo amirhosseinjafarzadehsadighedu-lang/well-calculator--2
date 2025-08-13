@@ -2,8 +2,10 @@ import pandas as pd
 import numpy as np
 try:
     from scipy.optimize import fsolve
+    import scipy
+    logging.info(f"Successfully imported scipy version {scipy.__version__}")
 except ImportError:
-    st.error("The 'scipy' package is missing. Ensure it is listed in requirements.txt and installed correctly.")
+    st.error("The 'scipy' package is missing. Ensure 'scipy==1.10.1' is listed in requirements.txt and installed correctly.")
     logging.error("Failed to import scipy. Check if scipy==1.10.1 is installed.")
     st.stop()
 import matplotlib.pyplot as plt
@@ -18,21 +20,32 @@ import time
 import logging
 # from github import Github  # Uncomment for GitHub integration
 
-# Set up logging
+# Set up logging with current date and time
 logging.basicConfig(filename='debug.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
+logging.info(f"App started at 10:36 PM +03, Wednesday, August 13, 2025")
 
 # Streamlit page configuration
 st.set_page_config(page_title="Well Pressure and Depth Calculator", layout="wide")
 
 # Dependency check
-required_modules = ['pandas', 'numpy', 'scipy', 'matplotlib', 'streamlit', 'openpyxl', 'tensorflow', 'sklearn']
-for module in required_modules:
+required_modules = {
+    'pandas': 'pandas==2.0.3',
+    'numpy': 'numpy==1.24.3',
+    'scipy': 'scipy==1.10.1',
+    'sklearn': 'scikit-learn==1.2.2',
+    'matplotlib': 'matplotlib==3.7.2',
+    'streamlit': 'streamlit==1.38.0',
+    'openpyxl': 'openpyxl==3.1.2',
+    'tensorflow': 'tensorflow==2.12.0'
+}
+for module, requirement in required_modules.items():
     try:
-        __import__(module)
+        mod = __import__(module)
+        logging.info(f"Successfully imported {module} version {mod.__version__}")
     except ImportError:
-        st.error(f"The '{module}' package is missing. Ensure it is listed in requirements.txt and installed correctly.")
-        logging.error(f"Failed to import {module}.")
+        st.error(f"The '{module}' package is missing. Ensure '{requirement}' is listed in requirements.txt and installed correctly.")
+        logging.error(f"Failed to import {module}. Check if {requirement} is installed.")
         st.stop()
 logging.info("All required modules imported successfully")
 
@@ -522,7 +535,7 @@ def save_uploaded_file(uploaded_file, file_path, retries=3, delay=1):
 
 # Streamlit UI
 st.title("Well Pressure and Depth Calculator")
-st.write("Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
+st.write(f"App started at 10:36 PM +03, Wednesday, August 13, 2025. Debug logs are saved to `debug.log`. Check Streamlit Cloud logs for detailed errors.")
 debug_mode = st.checkbox("Enable Debug Mode", value=False)
 
 mode = st.selectbox("Select Mode", ["Polynomial Calculation", "Neural Network Analysis", "GLR Graph Drawer"])
@@ -538,7 +551,7 @@ if mode in ["Polynomial Calculation", "GLR Graph Drawer"]:
         st.cache_data.clear()
         # # Push to GitHub (uncomment and configure)
         # github_token = st.secrets.get("GITHUB_TOKEN", None)  # Store in secrets.toml
-        # repo_name = "your_username/your_repo"  # Replace with your repo
+        # repo_name = "your_username/well-calculator--2"  # Replace with your repo
         # if github_token:
         #     push_to_github(reference_file_path, repo_name, github_token)
         # else:
@@ -558,7 +571,7 @@ elif mode == "Neural Network Analysis":
             save_uploaded_file(ml_file, ml_file_path)
             # # Push to GitHub (uncomment and configure)
             # github_token = st.secrets.get("GITHUB_TOKEN", None)
-            # repo_name = "your_username/your_repo"
+            # repo_name = "your_username/well-calculator--2"
             # if github_token:
             #     push_to_github(ml_file_path, repo_name, github_token)
             # else:
