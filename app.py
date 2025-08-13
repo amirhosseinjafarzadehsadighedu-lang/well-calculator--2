@@ -1,6 +1,11 @@
 import pandas as pd
 import numpy as np
-from scipy.optimize import fsolve
+try:
+    from scipy.optimize import fsolve
+except ImportError:
+    st.error("The 'scipy' package is missing. Ensure it is listed in requirements.txt and installed correctly.")
+    logging.error("Failed to import scipy. Check if scipy==1.10.1 is installed.")
+    st.stop()
 import matplotlib.pyplot as plt
 import streamlit as st
 import os
@@ -19,6 +24,17 @@ logging.basicConfig(filename='debug.log', level=logging.INFO,
 
 # Streamlit page configuration
 st.set_page_config(page_title="Well Pressure and Depth Calculator", layout="wide")
+
+# Dependency check
+required_modules = ['pandas', 'numpy', 'scipy', 'matplotlib', 'streamlit', 'openpyxl', 'tensorflow', 'sklearn']
+for module in required_modules:
+    try:
+        __import__(module)
+    except ImportError:
+        st.error(f"The '{module}' package is missing. Ensure it is listed in requirements.txt and installed correctly.")
+        logging.error(f"Failed to import {module}.")
+        st.stop()
+logging.info("All required modules imported successfully")
 
 # Create data directory if it doesn't exist
 DATA_DIR = "data"
@@ -451,17 +467,24 @@ def analyze_parameter_effects(model, scaler, df_ml):
         logging.error(f"Parameter effect analysis error: {str(e)}")
         return []
 
-# Function to save uploaded file to data directory
-def save_uploaded_file(uploaded_file, file_path):
-    try:
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        logging.info(f"Saved file: {file_path}")
-        st.success(f"Saved file: {os.path.basename(file_path)}")
-    except Exception as e:
-        st.error(f"Error saving file '{uploaded_file.name}': {str(e)}")
-        logging.error(f"Error saving file '{uploaded_file.name}' to '{file_path}': {str(e)}")
-        st.stop()
+# Function to save uploaded file to data directory with retry
+def save_uploaded_file(uploaded_file, file_path, retries=3, delay=1):
+    for attempt in range(retries):
+        try:
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+            logging.info(f"Saved file: {file_path}")
+            st.success(f"Saved file: {os.path.basename(file_path)}")
+            return True
+        except Exception as e:
+            logging.warning(f"Attempt {attempt+1} failed to save file '{uploaded_file.name}' to '{file_path}': {str(e)}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+            continue
+    st.error(f"Failed to save file '{uploaded_file.name}' after {retries} attempts.")
+    logging.error(f"Failed to save file '{uploaded_file.name}' to '{file_path}' after {retries} attempts")
+    st.stop()
+    return False
 
 # # Function to push file to GitHub (uncomment and configure for GitHub integration)
 # def push_to_github(file_path, repo_name, github_token, branch="main"):
